@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net6.0</TargetFramework>
+    <ImplicitUsings>true</ImplicitUsings>
+    <Configurations>Debug;Release;Swashbuckle</Configurations>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="coverlet.collector" Version="3.2.0">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+    <PackageReference Include="FluentAssertions" Version="6.11.0" />
+    <PackageReference Include="Microsoft.AspNet.WebApi.Client" Version="5.2.9" />
+    <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" Version="6.0.12" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.InMemory" Version="6.0.12" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.5.0" />
+    <PackageReference Include="Mongo2Go" Version="3.1.3" />
+    <PackageReference Include="Moq" Version="4.18.4" />
+    <PackageReference Include="MSTest.TestAdapter" Version="3.0.2" />
+    <PackageReference Include="MSTest.TestFramework" Version="3.0.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\GbiTestCadastro.Api\GbiTestCadastro.Api.csproj" />
+    <ProjectReference Include="..\..\src\GbiTestCadastro.Application\GbiTestCadastro.Application.csproj" />
+    <ProjectReference Include="..\..\src\GbiTestCadastro.CrossCutting\GbiTestCadastro.CrossCutting.csproj" />
+    <ProjectReference Include="..\..\src\GbiTestCadastro.Domain\GbiTestCadastro.Domain.csproj" />
+    <ProjectReference Include="..\..\src\GbiTestCadastro.Dto\GbiTestCadastro.Dto.csproj" />
+    <ProjectReference Include="..\..\src\GbiTestCadastro.Infra\GbiTestCadastro.Infra.csproj" />
+    <ProjectReference Include="..\Shared\GbiTestCadastro.Test.Shared.csproj" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,23 @@
+env: dev
+ASPNETCORE_ENVIRONMENT: Development
+
+aks:
+  host: 10.0.0.1
+  hostBasePath: myapi  
+  hostPort: 80
+  imagePullSecret: acr-secret
+
+dataDog:
+  serviceName: service-api
+  version: 1.0.0
+  agentHost: myagent-agent.datadog.svc.cluster.local
+  tags:
+    clentname: vertem
+    projectname: my-api
+    
+docker:
+  replicas: 3
+  containerRegistry:
+    url: myacr.azurecr.io
+    imageRepository: myimageapi
+    imageTag: latest

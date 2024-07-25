@@ -1,0 +1,395 @@
+trigger:
+- main
+- hml
+- dev
+
+variables:
+- name: sourceHelmChartDirectory
+  value: $(Build.SourcesDirectory)/pipeline/chart
+- name: destinationHelmChartDirectory
+  value: $(Agent.TempDirectory)/chart/ 
+- name: destinationHelmChartPackage
+  value: $(destinationHelmChartDirectory)/chart-$(Build.BuildId).tgz
+- name: ociHelmRepositoryUrl
+  value: oci://$(Docker.containerRegistry.url)/$(Docker.containerRegistry.imageRepository)
+- name: kubectlVersion
+  value: 1.25.0
+- name: helmVersion
+  value: 3.9.0
+- ${{ if eq(variables['build.SourceBranchName'], 'dev') }}:
+  - group: boilerplate-api-containers-dev
+- ${{ if eq(variables['build.SourceBranchName'], 'hml') }}:
+  - group: boilerplate-api-containers-hml
+- ${{ if eq(variables['build.SourceBranchName'], 'main') }}:
+  - group: boilerplate-api-containers-prd
+
+pool:
+  vmImage: ubuntu-latest
+
+name: 1.0.$(Rev:r)
+stages:
+
+- stage: build
+  displayName: Build
+  jobs:
+  - job: BuildAndTest
+    displayName: Build and Test
+    steps:
+    - task: UseDotNet@2
+      displayName: 'Use .NET Core sdk 6.0.x'
+      inputs:
+          packageType: 'sdk'
+          version: '6.0.x'
+          includePreviewVersions: false
+
+    - task: DotNetCoreCLI@2
+      displayName: dotnet restore
+      inputs:
+        command: 'restore'
+        projects: '**/*.csproj'
+        feedsToUse: 'select'
+        vstsFeed: '$(AzureDevOps.NugetFeed)'
+
+    - task: SonarCloudPrepare@1
+      inputs:
+        SonarCloud: '$(SonarQube.serviceConnection)'
+        organization: '$(SonarQube.organization)'
+        scannerMode: 'MSBuild'
+        projectKey: '$(SonarQube.projectKey)'
+        projectName: '$(SonarQube.projectName)'
+        extraProperties: |
+            sonar.coverageReportPaths="./sonarqubecoverage/SonarQube.xml"
+
+    - task: DotNetCoreCLI@2
+      displayName: dotnet build
+      inputs:
+        command: 'build'
+        projects: '**/*.csproj'
+
+    - task: DotNetCoreCLI@2
+      displayName: dotnet test for sonar
+      inputs:
+        command: 'test'
+        projects: 'test/**/*.csproj'
+        arguments: '--logger "trx;LogFileName=test_results.xml" /p:CollectCoverage=true --collect:"XPlat Code Coverage" '
+
+    - script: 'dotnet tool install --global dotnet-reportgenerator-globaltool --version 4.5.8'
+      displayName: 'Install ReportGenerator tool'
+
+    - script: 'reportgenerator " -reports:$(Agent.TempDirectory)/**/coverage.cobertura.xml" "-targetdir:sonarqubecoverage" "-reporttypes:SonarQube"'
+      displayName: 'Create reports for sonar'
+
+    - task: SonarCloudAnalyze@1
+
+    - task: SonarCloudPublish@1
+      inputs:
+        pollingTimeoutSec: '300'
+
+    - task: sonarcloud-buildbreaker@2
+      continueOnError: true
+      inputs:
+        SonarCloud: '$(SonarQube.serviceConnection)'
+        organization: '$(SonarQube.organization)'
+
+    - task: DotNetCoreCLI@2
+      displayName: dotnet test for azure
+      inputs:
+        command: 'test'
+        projects: 'test/**/*.csproj'
+        arguments: '--configuration $(AzureDevOps.buildConfiguration) --collect "XPlat Code coverage" -- RunConfiguration.DisableAppDomain=true'
+
+    - script: 'reportgenerator -reports:$(Agent.TempDirectory)/**/coverage.cobertura.xml -targetdir:$(Build.SourcesDirectory)/coverlet/reports -reporttypes:"Cobertura"'
+      displayName: 'Create reports for azure'
+
+    - task: PublishCodeCoverageResults@1
+      displayName: 'Publish code coverage to azure devops'
+      inputs:
+        codeCoverageTool: Cobertura
+        summaryFileLocation: '$(Build.SourcesDirectory)/coverlet/reports/Cobertura.xml'
+
+- stage: BuildAndPushDockerImage
+  displayName: Build and push Docker stage
+  dependsOn: build
+  jobs:
+  - job: BuildAndPushImage
+    displayName: Build and Push Docker Image
+    pool:
+      vmImage: $(AzureDevOps.vmImageName)
+    steps:
+    - script: 'echo $(System.AccessToken)'
+    - task: Docker@2
+      displayName: Build Docker Image
+      inputs:
+        containerRegistry: $(Docker.containerRegistry.serviceConnection)
+        repository: '$(Docker.containerRegistry.imageRepository)'
+        command: 'build'
+        buildContext: .
+        Dockerfile: $(Docker.filePath)
+        tags: |
+          $(Docker.imageTag)
+          latest
+        arguments: '--build-arg PAT=$(System.AccessToken)'
+    - task: Docker@2
+      displayName: Push Docker Image
+      inputs:
+        containerRegistry: $(Docker.containerRegistry.serviceConnection)
+        repository: $(Docker.containerRegistry.imageRepository)
+        command: 'push'
+        tags: |
+          $(Docker.imageTag)
+          latest
+
+- stage: PackageAndPushHelm
+  displayName: Build and push HELM stage
+  dependsOn: BuildAndPushDockerImage
+  jobs:
+  - job: PackageAndPushHelm
+    displayName: Package And Push Helm
+    pool:
+      vmImage: $(AzureDevOps.vmImageName)
+    steps:
+
+    - task: HelmInstaller@0
+      displayName: Install Helm
+      inputs:
+        helmversion: $(helmVersion)
+        kubectlVersion: $(kubectlVersion)
+        checkLatestHelmVersion: false
+
+    - task: replacetokens@5
+      displayName: 'Replace tokens in Namespace'
+      inputs:
+        targetFiles: '$(sourceHelmChartDirectory)/namespace.yaml'
+        encoding: 'auto'
+        tokenPattern: 'default'
+        writeBOM: true
+        actionOnMissing: 'warn'
+        keepToken: false
+        actionOnNoFiles: 'continue'
+        enableTransforms: false
+        enableRecursion: false
+        useLegacyPattern: false
+        enableTelemetry: true        
+
+    - script: helm lint $(sourceHelmChartDirectory)
+      displayName: Lint Helm chart
+
+    - script: |
+        helm registry login -u $(Docker.containerRegistry.username) -p '$(Docker.containerRegistry.password)' $(Docker.containerRegistry.url)
+        helm package $(sourceHelmChartDirectory) --version $(Build.BuildId) --app-version $(Build.BuildId) --dependency-update --destination $(destinationHelmChartDirectory)
+        helm push $(destinationHelmChartPackage) $(ociHelmRepositoryUrl)
+        helm registry logout $(Docker.containerRegistry.url)
+      displayName: "Publish Helm chart into $(ociHelmRepositoryUrl)"
+
+    - upload: '$(destinationHelmChartPackage)'
+      artifact: destination-helm-chart    
+
+    - upload: '$(sourceHelmChartDirectory)'
+      artifact: source-helm-chart        
+
+- stage: DeployHelmIntoAks
+  displayName: Deploy Helm into Azure Kubernetes Service
+  dependsOn: PackageAndPushHelm
+
+  jobs:
+  - deployment: Deploy
+    displayName: Deploy
+    pool:
+      vmImage: $(AzureDevOps.vmImageName)
+    environment: '$(AzureDevOps.appenv)'
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+
+          - task: CmdLine@2
+            displayName: Create source chart directory
+            inputs:
+              script: 'mkdir source-helm-chart'
+
+          - task: DownloadPipelineArtifact@2
+            displayName: 'Download Source Chart'
+            inputs:
+              artifactName: 'source-helm-chart'
+              targetPath: 'source-helm-chart'                      
+
+          - task: HelmInstaller@0
+            displayName: Install Helm
+            inputs:
+              helmversion: $(helmVersion)
+              kubectlVersion: $(kubectlVersion)
+              checkLatestHelmVersion: false      
+
+          - task: KubernetesManifest@0
+            continueOnError: true
+            displayName: Create Namespace K8s with istio label
+            inputs:
+              kubernetesServiceConnection: $(Azure.serviceConnection.scK8s)
+              action: deploy
+              manifests: |
+                $(System.DefaultWorkingDirectory)/source-helm-chart/namespace.yaml
+
+          - task: KubernetesManifest@0
+            displayName: Create imagePullSecret
+            inputs:
+              action: createSecret
+              namespace: $(AKS.namespace)
+              secretName: $(AKS.imagePullSecret)
+              dockerRegistryEndpoint: $(Docker.containerRegistry.serviceConnection)
+              kubernetesServiceConnection: '$(Azure.serviceConnection.scK8s)'     
+
+          - script: |
+              rm -rf $(destinationHelmChartDirectory)
+              mkdir -p $(destinationHelmChartDirectory)
+              cd $(destinationHelmChartDirectory)
+              helm registry login -u $(Docker.containerRegistry.username) -p '$(Docker.containerRegistry.password)' $(Docker.containerRegistry.url)
+              helm pull $(ociHelmRepositoryUrl)/chart --version $(Build.BuildId)
+              ls
+            displayName: "Pull chart"
+
+          - task: HelmDeploy@0
+            inputs:
+              connectionType: 'Kubernetes Service Connection'
+              kubernetesServiceConnection: $(Azure.serviceConnection.scK8s)
+              command: 'upgrade'
+              chartType: 'FilePath'
+              chartPath: '$(destinationHelmChartPackage)'        
+              chartVersion: '$(Build.BuildId)'
+              azureSubscriptionForACR: '$(Azure.serviceConnection)'
+              azureResourceGroupForACR: '$(Azure.resourcegroup)'
+              azureContainerRegistry: '$(Docker.containerRegistry.url)'
+              install: true
+              namespace: $(AKS.namespace)
+              releaseName: $(Helm.releaseName)
+              displayName: "Helm install/upgrade"          
+              arguments: >
+                  --set ASPNETCORE_ENVIRONMENT=$(ASPNETCORE_ENVIRONMENT)
+                  --set env=$(env)
+                  --set aks.host=$(AKS.host)              
+                  --set aks.hostBasePath=$(AKS.host_base_path)
+                  --set aks.hostPort=$(AKS.host_port)     
+                  --set aks.imagePullSecret=$(AKS.imagePullSecret)                  
+                  --set docker.containerRegistry.url=$(Docker.containerRegistry.url)
+                  --set docker.containerRegistry.imageRepository=$(Docker.containerRegistry.imageRepository)
+                  --set docker.containerRegistry.imageTag=$(Docker.imageTag)
+                  --set docker.replicas=3
+                  --set dataDog.serviceName=$(DataDog.serviceName)
+                  --set dataDog.version=$(Build.BuildId)
+                  --set dataDog.agentHost=$(DataDog.agentHost)
+                  --set dataDog.tags.clientname=$(DataDog.tags.clientname)
+                  --set dataDog.tags.projectname=$(DataDog.tags.projectname)
+
+- stage: genarateswagger
+  displayName: Genarate Swagger Spec
+  jobs:
+  - job: Build
+    displayName: Build and Extract OpenApi json
+    steps:
+
+    - task: UseDotNet@2
+      displayName: 'Use .NET Core sdk 6.0.x'
+      inputs:
+          packageType: 'sdk'
+          version: '6.0.x'
+          includePreviewVersions: false    
+
+    - task: DotNetCoreCLI@2
+      displayName: 'Install Manifest'
+      inputs:
+        command: custom
+        custom: new
+        arguments: 'tool-manifest'
+
+    - task: DotNetCoreCLI@2
+      displayName: 'Install Swashbuckle CLI'
+      inputs:
+        command: custom
+        custom: tool
+        arguments: 'install Swashbuckle.AspNetCore.Cli --version 6.4.0'
+
+    - task: DotNetCoreCLI@2
+      displayName: dotnet restore
+      inputs:
+        command: 'restore'
+        projects: '**/*.csproj'
+        feedsToUse: 'select'
+        vstsFeed: '$(AzureDevOps.NugetFeed)'
+
+    - task: DotNetCoreCLI@2
+      displayName: 'Publish API'
+      inputs:
+        command: publish
+        arguments: '--configuration SWASHBUCKLE --no-restore --output $(Build.ArtifactStagingDirectory)/app'
+        zipAfterPublish: false
+
+    - task: CmdLine@2
+      displayName: Create specs directory
+      inputs:
+        script: 'mkdir $(Build.ArtifactStagingDirectory)/specs'
+
+    - task: DotNetCoreCLI@2
+      displayName: 'Generate OpenAPI spec document'
+      inputs:
+        command: custom
+        custom: swagger
+        arguments: 'tofile --output $(Build.ArtifactStagingDirectory)/specs/$(appName).v1.json $(Build.ArtifactStagingDirectory)/app/$(appName)/$(appName).dll v1'
+
+    - task: PublishPipelineArtifact@1
+      displayName: Publish specs
+      inputs:
+        PathtoPublish: '$(Build.ArtifactStagingDirectory)/specs'
+        ArtifactName: 'swagger'
+
+- stage: Apim
+  displayName: Publish API into APIM
+  jobs:
+  - job: Apim
+    displayName: Publish API into APIM
+    pool:
+      vmImage: windows-latest
+    steps:
+
+    - task: CmdLine@2
+      displayName: Create specs directory
+      inputs:
+        script: 'mkdir swagger'
+
+    - task: DownloadPipelineArtifact@2
+      displayName: 'Download Specs'
+      inputs:
+        artifactName: 'swagger'
+        targetPath: 'swagger'
+
+    - task: stephane-eyskens.apim.apim.apim@5
+      displayName: 'API Management - Create/Update API'
+      inputs:
+        ConnectedServiceNameARM: '$(Azure.serviceConnection)'
+        ResourceGroupName: '$(Azure.resourcegroup)'
+        ApiPortalName: '$(APIM.ApiPortalName)'
+        UseProductCreatedByPreviousTask: false
+        product1: $(APIM.Product)
+        OpenAPISpec: v3
+        SwaggerPicker: Artifact
+        swaggerartifact: '$(System.DefaultWorkingDirectory)\swagger\a\specs\$(appName).v1.json'
+        targetapi: '$(APIM.TargetApi)'
+        DisplayName: '$(APIM.DisplayName)'
+        pathapi: '$(APIM.PathApi)'
+        subscriptionRequired: true
+        TemplateSelector: Custom
+        Custom: |
+          <policies>
+              <inbound>
+                  <base />
+                  <set-backend-service base-url="http://$(AKS.host)/$(AKS.host_base_path)" />
+              </inbound>
+              <backend>
+                  <base />
+              </backend>
+              <outbound>
+                  <base />
+              </outbound>
+              <on-error>
+                  <base />
+              </on-error>
+          </policies>
+        MicrosoftApiManagementAPIVersion: '2018-01-01'    

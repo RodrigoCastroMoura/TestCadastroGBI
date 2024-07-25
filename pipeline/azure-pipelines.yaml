@@ -1,0 +1,180 @@
+trigger:
+- main
+- hml
+- dev
+
+variables:
+- ${{ if eq(variables['build.SourceBranchName'], 'main') }}:
+  - group: boilerplate-api-webapp-prd
+- ${{ if eq(variables['build.SourceBranchName'], 'hml') }}:
+  - group: boilerplate-api-webapp-hml
+- ${{ if eq(variables['build.SourceBranchName'], 'dev') }}:
+  - group: boilerplate-api-webapp-dev
+
+pool:
+  vmImage: ubuntu-latest
+
+name: 1.0.$(Rev:r)
+
+stages:
+- stage: build
+  displayName: Build
+  jobs:
+  - job: BuildAndTest
+    displayName: Build and Test
+    steps:
+    - task: DotNetCoreCLI@2
+      displayName: dotnet restore
+      inputs:
+        command: 'restore'
+        projects: '**/*.csproj'
+        feedsToUse: 'select'
+        vstsFeed: '$(AzureDevOps.NugetFeed)'
+
+    - task: SonarCloudPrepare@1
+      inputs:
+        SonarCloud: '$(SonarQube.serviceConnection)'
+        organization: '$(SonarQube.organization)'
+        scannerMode: 'MSBuild'
+        projectKey: '$(SonarQube.projectKey)'
+        projectName: '$(SonarQube.projectName)'
+        extraProperties: |
+            sonar.coverageReportPaths="./sonarqubecoverage/SonarQube.xml"
+
+    - task: DotNetCoreCLI@2
+      displayName: dotnet build
+      inputs:
+        command: 'build'
+        projects: '**/*.csproj'
+
+    - task: DotNetCoreCLI@2
+      displayName: dotnet test for sonar
+      inputs:
+        command: 'test'
+        projects: 'test/**/*.csproj'
+        arguments: '--logger "trx;LogFileName=test_results.xml" /p:CollectCoverage=true --collect:"XPlat Code Coverage" '
+
+    - script: 'dotnet tool install --global dotnet-reportgenerator-globaltool --version 4.5.8'
+      displayName: 'Install ReportGenerator tool'
+
+    - script: 'reportgenerator " -reports:$(Agent.TempDirectory)/**/coverage.cobertura.xml" "-targetdir:sonarqubecoverage" "-reporttypes:SonarQube"'
+      displayName: 'Create reports for sonar'
+
+    - task: SonarCloudAnalyze@1
+
+    - task: SonarCloudPublish@1
+      inputs:
+        pollingTimeoutSec: '300'
+
+    - task: sonarcloud-buildbreaker@2
+      inputs:
+        SonarCloud: '$(SonarQube.serviceConnection)'
+        organization: '$(SonarQube.organization)'
+
+    - task: DotNetCoreCLI@2
+      displayName: dotnet test for azure
+      inputs:
+        command: 'test'
+        projects: 'test/**/*.csproj'
+        arguments: '--configuration $(BuildConfiguration) --collect "XPlat Code coverage" -- RunConfiguration.DisableAppDomain=true'
+
+    - script: 'reportgenerator -reports:$(Agent.TempDirectory)/**/coverage.cobertura.xml -targetdir:$(Build.SourcesDirectory)/coverlet/reports -reporttypes:"Cobertura"'
+      displayName: 'Create reports for azure'
+
+    - task: PublishCodeCoverageResults@1
+      displayName: 'Publish code coverage to azure devops'
+      inputs:
+        codeCoverageTool: Cobertura
+        summaryFileLocation: '$(Build.SourcesDirectory)/coverlet/reports/Cobertura.xml'
+
+  - job: publish
+    displayName: job Publish
+    dependsOn: BuildAndTest
+    pool:
+      vmImage: windows-2022
+    steps:
+    - task: DotNetCoreCLI@2
+      displayName: dotnet restore
+      inputs:
+        command: 'restore'
+        projects: '**/*.csproj'
+        feedsToUse: 'select'
+        vstsFeed: '$(AzureDevOps.NugetFeed)'
+    - task: DotNetCoreCLI@2
+      displayName: Publish
+      inputs:
+        command: publish
+        publishWebProjects: True
+        arguments: '--configuration $(BuildConfiguration) --output $(build.artifactstagingdirectory)'
+        zipAfterPublish: True
+        modifyOutputPath: false
+    - task: PublishBuildArtifacts@1
+      displayName: 'Publish Artifact'
+      inputs:
+        PathtoPublish: '$(Build.ArtifactStagingDirectory)'
+        ArtifactName: '$(Azure.webappname)'
+
+- stage: deploy
+  displayName: Deploy
+  dependsOn: build
+  pool:
+    vmImage: windows-2022
+  jobs:
+  - deployment: deploywebapp
+    displayName: Deploy WebApp
+    pool:
+      vmImage: windows-2022
+    environment: '$(AzureDevOps.environment)'
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - task: DownloadPipelineArtifact@2
+            displayName: 'Download Artifact'
+            inputs:
+              buildVersionToDownload: 'latest'
+              artifactName: '$(Azure.webappname)'
+              targetPath: '$(Build.ArtifactStagingDirectory)'
+          - task: AzureRmWebAppDeployment@4
+            condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
+            displayName: 'Deploy Webapp Slot PRD'
+            inputs:
+              ConnectionType: 'AzureRM'
+              azureSubscription: '$(Azure.serviceConnection)'
+              appType: 'webApp'
+              WebAppName: $(Azure.webappname)
+              DeployToSlotOrASEFlag: true
+              ResourceGroupName: $(Azure.resourcegroup)
+              SlotName: $(Azure.slotname)
+              Package: $(Build.ArtifactStagingDirectory)/**/*.zip
+              AppSettings: -ASPNETCORE_ENVIRONMENT $(ASPNETCORE_ENVIRONMENT) -DD_API_KEY $(DataDog.apiKey) -DD_SERVICE $(DataDog.serviceName) -DD_ENV $(env) -DD_TAGS $(DataDog.tags) -DD_RUNTIME_METRICS_ENABLED true -DD_LOGS_INJECTION true -DD_TRACE_ENABLED true -DD_VERSION $(AzureDevOps.version)
+          - task: AzureRmWebAppDeployment@4
+            condition: and(succeeded(), ne(variables['Build.SourceBranch'], 'refs/heads/main'))
+            displayName: 'Deploy Webapp DEV / HML'
+            inputs:
+              ConnectionType: 'AzureRM'
+              azureSubscription: '$(Azure.serviceConnection)'
+              appType: 'webApp'
+              WebAppName: $(Azure.webappname)
+              ResourceGroupName: $(Azure.resourcegroup)
+              Package: $(Build.ArtifactStagingDirectory)/**/*.zip
+              AppSettings: -ASPNETCORE_ENVIRONMENT $(ASPNETCORE_ENVIRONMENT)
+
+- stage: swapslotprod
+  displayName: Slot Prod
+  condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
+  jobs:
+  - job: slottoproduction
+    displayName: Slot to Production
+    pool:
+      vmImage: windows-latest
+    steps:
+    - task: AzureAppServiceManage@0
+      displayName: Azure Swap
+      condition: succeeded()
+      inputs:
+        azureSubscription: '$(Azure.serviceConnection)'
+        Action: 'Swap Slots'
+        WebAppName: $(Azure.webappname)
+        ResourceGroupName: $(Azure.resourcegroup)
+        SourceSlot: $(Azure.slotname)

@@ -1,0 +1,7 @@
+kind: Namespace
+apiVersion: v1
+metadata:
+  name: "#{AKS.namespace}#"
+  labels:
+    name: "#{AKS.namespace}#"
+    istio-injection: enabled 
