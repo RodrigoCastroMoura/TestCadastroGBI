@@ -17,7 +17,6 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Solution Items", "Solution 
 		CodeMaid.config = CodeMaid.config
 		Nuget.config = Nuget.config
 		README.md = README.md
-		rename.py = rename.py
 	EndProjectSection
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "GbiTestCadastro.Application", "src\GbiTestCadastro.Application\GbiTestCadastro.Application.csproj", "{C04C8DA4-FE92-4EA3-A41B-334E2FB49349}"
@@ -36,7 +35,7 @@ Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "GbiTestCadastro.Dto", "src\
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Test", "Test", "{6F60B945-25AD-4EDE-A037-5717717D521F}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "GbiTestCadastro.Test.Unit", "GbiTestCadastro.Test.Unit\GbiTestCadastro.Test.Unit.csproj", "{21DA4857-C84B-4DFD-B75B-47C071F3D8F8}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "GbiTestCadastro.Test.Unit", "GbiTestCadastro.Test.Unit\GbiTestCadastro.Test.Unit.csproj", "{21DA4857-C84B-4DFD-B75B-47C071F3D8F8}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
