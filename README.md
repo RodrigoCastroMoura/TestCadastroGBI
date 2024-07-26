@@ -36,8 +36,8 @@ docker build -t myproject_image .
 ```
 ### 2. Construir a Conterner Docker
 ```bash
-docker run -d -p 5000:80 --name myproject_container myproject_image
+docker run -d -p 5000:80 --name myproject_container ou myproject_image
 
-curl http://http://localhost:5000/swagger/index.html
+curl http://localhost:5000/swagger/index.html
 
 ```
