@@ -26,3 +26,18 @@ Clone este repositório para sua máquina local usando o comando abaixo:
 ```bash
 git https://github.com/RodrigoCastroMoura/TestCadastroGBI.git
 cd GbiTestCadastro
+
+```
+## Comandos Docker
+
+### 1. Construir a imagem Docker
+```bash
+docker build -t myproject_image .
+```
+### 2. Construir a Conterner Docker
+```bash
+docker run -d -p 5000:80 --name myproject_container myproject_image
+
+curl http://http://localhost:5000/swagger/index.html
+
+```
