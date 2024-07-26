@@ -4,5 +4,5 @@ CREATE TABLE IF NOT EXISTS Usuarios (
     Email TEXT NOT NULL UNIQUE,
     Username TEXT NOT NULL UNIQUE,
     Senha TEXT NOT NULL,
-    DataCadastro DATE NOT NULL
+    Data DATE NOT NULL
 );
